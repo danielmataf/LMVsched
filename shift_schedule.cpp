@@ -11,31 +11,31 @@
 class Employee {
 public:
     std::string name;
-    std::string color;   // Unique color for each employee (used for PDF later)
-    int weeklyHours;     // Total contracted weekly hours
+    std::string color;
+    int weeklyHours;
     int dailyWorkedHours[7];   // Hours worked per day (0 = Tuesday, 6 = Sunday)
-    bool isManager;      // If the employee is a manager (A and B)
+    bool isManager;
 
     // Constraints
     bool mustWork[7][2];   // Mandatory work hours (startHour, endHour)
     bool mustBeOff[7][2];  // Off-hours constraints (startHour, endHour)
-    int maxDailyHours;     // Max shift hours per day
-    int minConsecutiveHours; // Minimum shift length (4 hours)
+    int maxDailyHours;
+    int minConsecutiveHours;
 
     // Constructor
     Employee(std::string n, std::string c, int h, bool manager, int maxDaily, int minConsecutive)
         : name(n), color(c), weeklyHours(h), isManager(manager), maxDailyHours(maxDaily), minConsecutiveHours(minConsecutive) {
         for (int i = 0; i < 7; i++) {
             dailyWorkedHours[i] = 0;
-            mustWork[i][0] = mustWork[i][1] = -1;  // No mandatory work slots by default
-            mustBeOff[i][0] = mustBeOff[i][1] = -1; // No mandatory off slots by default
+            mustWork[i][0] = mustWork[i][1] = -1;
+            mustBeOff[i][0] = mustBeOff[i][1] = -1;
         }
     }
-    
+
     // Check if available for a shift
     bool isAvailable(int day, int startHour, int endHour) {
         if (mustBeOff[day][0] != -1 && startHour >= mustBeOff[day][0] && endHour <= mustBeOff[day][1]) {
-            return false; // The employee is required to be off during this time
+            return false;
         }
         return true;
     }
@@ -57,72 +57,110 @@ public:
     }
 };
 
-// Function to generate a random schedule and write it to a text file
-void generateSchedule(std::vector<Employee> &employees, std::ofstream &outputFile) {
-    const int openTime[6] = {8 * 60, 8 * 60, 8 * 60, 8 * 60, 7 * 60 + 30, 8 * 60};  // Store opening times for each day
-    const int closeTime[6] = {20 * 60 + 30, 20 * 60 + 30, 20 * 60 + 30, 20 * 60 + 30, 20 * 60 + 30, 14 * 60};  // Closing times
+// Class to represent each day
+class Day {
+public:
+    int dayType;
+    std::string dayName;
+    int openTime;
+    int closeTime;
+    std::vector<std::vector<int>> schedule;  // Schedule matrix: employees x time slots
 
-    // Random number generator
+    Day(int type, const std::string& name) : dayType(type), dayName(name) {
+        switch (dayType) {
+            case 1:
+                openTime = 8 * 60;
+                closeTime = 20 * 60 + 30;
+                break;
+            case 2:
+                openTime = 7 * 60 + 30;
+                closeTime = 20 * 60 + 30;
+                break;
+            case 3:
+                openTime = 8 * 60;
+                closeTime = 14 * 60;
+                break;
+            default:
+                openTime = 0;
+                closeTime = 0;
+        }
+        int numSlots = (closeTime - openTime) / 30; // Calculate the number of slots
+        schedule = std::vector<std::vector<int>>(7, std::vector<int>(numSlots, 0)); // Initialize schedule
+    }
+
+    // Function to add employee shifts
+    void addEmployeeShift(Employee& employee, int day, std::mt19937& g) {
+        int current_minutes = 0;
+        std::vector<int> availableSlots;
+
+        for (int i = 0; i < schedule[0].size(); ++i) {
+            int startHour = openTime + i * 30;
+            int endHour = startHour + 30;
+            if (employee.isAvailable(day, startHour, endHour)) {
+                availableSlots.push_back(i);
+            }
+        }
+
+        // Shuffle available slots to randomize assignments
+        std::shuffle(availableSlots.begin(), availableSlots.end(), g);
+
+        for (int slot : availableSlots) {
+            if (current_minutes >= employee.maxDailyHours) break;
+
+            int startHour = openTime + slot * 30;
+            int endHour = startHour + 30;
+
+            if (employee.isAvailable(day, startHour, endHour) && slot < schedule[0].size()) {
+                schedule[employee.name[0] - 'A'][slot] = 1;  // Corrected indexing to avoid out-of-bounds errors
+                employee.assignShift(day, startHour, endHour);
+                current_minutes += 30;
+            }
+        }
+    }
+};
+
+// Function to generate the schedule for the entire week
+void generateWeeklySchedule(std::vector<Employee>& employees, std::vector<Day>& week, std::ofstream& outputFile) {
     std::random_device rd;
     std::mt19937 g(rd());
 
-    // Iterate over each day
-    for (int day = 0; day < 6; ++day) {
-        outputFile << "\n\nDay " << day + 1 << ": (in 30-minute slots)\n";
-        outputFile << "     ,A,B,C,D,E,F,G\n"; // Header for each day with 5 spaces at the start
+    for (int dayIndex = 0; dayIndex < week.size(); ++dayIndex) {
+        outputFile << "\n\n" << week[dayIndex].dayName << ": (in 30-minute slots)\n";
+        outputFile << "     ,A,B,C,D,E,F,G\n";
 
-        int hoursWorked[7] = {0}; // Track daily hours for each employee
-        
-        for (int time = openTime[day]; time <= closeTime[day]; time += 30) {
-            // Write the time slot to the file
-            int hour = time / 60;
-            int minute = time % 60;
+        // Shuffle the employees to vary assignment
+        std::shuffle(employees.begin(), employees.end(), g);
+
+        for (auto& employee : employees) {
+            if (!(employee.name == "G" && week[dayIndex].dayType == 1)) {
+                week[dayIndex].addEmployeeShift(employee, dayIndex, g);
+            }
+        }
+
+        // Print the schedule
+        for (int i = 0; i < week[dayIndex].schedule[0].size(); ++i) {
+            int hour = week[dayIndex].openTime / 60 + (i / 2);
+            int minute = (i % 2 == 0) ? 0 : 30;
             outputFile << std::setw(2) << std::setfill('0') << hour << "h" << std::setw(2) << std::setfill('0') << minute << ",";
-            
-            std::vector<int> availableEmployees;
 
-            // Find available employees for this time slot
-            for (size_t i = 0; i < employees.size(); ++i) {
-                if (employees[i].isAvailable(day, time, time + 30)) {
-                    availableEmployees.push_back(i);
-                }
+            for (int j = 0; j < 7; ++j) {
+                outputFile << week[dayIndex].schedule[j][i] << ",";
             }
-
-            // Shuffle available employees
-            std::shuffle(availableEmployees.begin(), availableEmployees.end(), g);
-            int assignedCount = std::min(4, static_cast<int>(availableEmployees.size()));  // Maximum 4 employees per slot
-
-            // Initialize all slots to 0 (not working)
-            int workSlots[7] = {0, 0, 0, 0, 0, 0, 0};
-
-            // Assign shifts
-            for (int i = 0; i < assignedCount; ++i) {
-                employees[availableEmployees[i]].assignShift(day, time, time + 30);
-                hoursWorked[availableEmployees[i]] += 30;  // 30 minutes increment
-                workSlots[availableEmployees[i]] = 1; // Mark the employee as working this slot
-            }
-
-            // Output the results to the file
-            for (int i = 0; i < 7; ++i) {
-                outputFile << workSlots[i] << ",";
-            }
-            outputFile << "\n"; // New line for the next time slot
+            outputFile << "\n";
         }
 
-        // Print the total hours worked by each employee at the end of the day
         outputFile << "\nDaily summary:\n";
-        for (size_t i = 0; i < employees.size(); ++i) {
-            outputFile << employees[i].name << ": " << hoursWorked[i] / 60 << " hours " << (hoursWorked[i] % 60) << " minutes\n";
+        for (auto& employee : employees) {
+            outputFile << employee.name << ": " << employee.dailyWorkedHours[dayIndex] / 60 << " hours " << (employee.dailyWorkedHours[dayIndex] % 60) << " minutes\n";
         }
 
-        // Skip three lines before the next day
         outputFile << "\n\n\n";
     }
 }
 
 // Main function
 int main() {
-    srand(time(0));  // Seed random number generator for unique outputs on every run
+    srand(time(0));
 
     // Initialize employees with their contract hours and constraints
     std::vector<Employee> employees;
@@ -135,19 +173,22 @@ int main() {
     employees.push_back(Employee("G", "#FF4081", 15, false, 8 * 60, 4 * 60));
 
     // Add specific constraints
-    employees[0].addMustWorkConstraint(0, 12 * 60 + 30, 15 * 60 + 30);  // A (Tuesday 12:30-15:30)
-    employees[0].addMustWorkConstraint(4, 12 * 60 + 30, 15 * 60 + 30);  // A (Friday 12:30-15:30)
+    employees[0].addMustWorkConstraint(0, 12 * 60 + 30, 15 * 60 + 30);  
+    employees[0].addMustWorkConstraint(4, 12 * 60 + 30, 15 * 60 + 30);
 
-    employees[1].addMustWorkConstraint(0, 12 * 60 + 30, 15 * 60 + 30);  // B (Tuesday 12:30-15:30)
-    employees[1].addMustWorkConstraint(4, 12 * 60 + 30, 15 * 60 + 30);  // B (Friday 12:30-15:30)
-    employees[1].addMustBeOffConstraint(2, 17 * 60, 20 * 60 + 30);      // B (Wednesday after 5pm)
+    employees[1].addMustWorkConstraint(0, 12 * 60 + 30, 15 * 60 + 30);  
+    employees[1].addMustWorkConstraint(4, 12 * 60 + 30, 15 * 60 + 30);
+    employees[1].addMustBeOffConstraint(2, 17 * 60, 20 * 60 + 30); 
 
-    // Ensure G (Juliette) only works on weekends
-    for (int i = 0; i < 4; ++i) {  // Days 0-3 correspond to Tuesday-Friday
-        employees[6].addMustBeOffConstraint(i, 0, 24 * 60);  // G off all day from Tuesday to Friday
+    for (int i = 0; i < 4; ++i) {  
+        employees[6].addMustBeOffConstraint(i, 0, 24 * 60);  
     }
 
-    // Open file for output
+    std::vector<Day> week = {
+        Day(1, "Mardi"), Day(1, "Mercredi"), Day(1, "Jeudi"), Day(1, "Vendredi"),
+        Day(2, "Samedi"), Day(3, "Dimanche")
+    };
+
     std::ofstream outputFile("shift_schedule.txt");
 
     if (!outputFile) {
@@ -155,8 +196,7 @@ int main() {
         return 1;
     }
 
-    // Generate a random weekly schedule and output to file
-    generateSchedule(employees, outputFile);
+    generateWeeklySchedule(employees, week, outputFile);
 
     outputFile.close();
     std::cout << "Schedule written to shift_schedule.txt.\n";
